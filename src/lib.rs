@@ -6,6 +6,14 @@ use std::{
     pin::Pin,
 };
 
+unsafe fn pin_dance<'a, R, T>(pin: &'a mut Pin<R>) -> &'a mut T
+where
+    R: DerefMut<Target = T>,
+{
+    let mut_pin = Pin::as_mut(pin);
+    Pin::get_unchecked_mut(mut_pin)
+}
+
 pub struct Dereference<R, T> {
     referent: MaybeUninit<Box<T>>,
     referee: R, // Must come second for drop order to be safe
@@ -23,8 +31,7 @@ impl<R, T> Dereference<R, T> {
 
     fn pinnit(t: T, mut this: Pin<Box<Self>>) -> Pin<Box<Self>> {
         unsafe {
-            let mut_pin = Pin::as_mut(&mut this);
-            Pin::get_unchecked_mut(mut_pin).referent = MaybeUninit::new(Box::new(t));
+            pin_dance(&mut this).referent = MaybeUninit::new(Box::new(t));
         }
 
         this
@@ -73,11 +80,9 @@ impl<R, T> Dereference<R, T> {
         let mut d = DereferenceMut::new0(this);
 
         unsafe {
-            let mut_pin = Pin::as_mut(&mut d);
-            let mut_d = Pin::get_unchecked_mut(mut_pin);
+            let mut_d = pin_dance(&mut d);
+            let t_ptr = pin_dance(&mut mut_d.referee).referent.as_mut_ptr();
 
-            let mut_self = Pin::as_mut(&mut mut_d.referee);
-            let t_ptr = Pin::get_unchecked_mut(mut_self).referent.as_mut_ptr();
             mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
         };
 
@@ -91,8 +96,7 @@ impl<R, T> Dereference<R, T> {
     {
         unsafe {
             // Get inside the pin
-            let mut_pin = Pin::as_mut(&mut this);
-            let mut_ref = Pin::get_unchecked_mut(mut_pin);
+            let mut_ref = pin_dance(&mut this);
 
             // prepare a landing zone for our current referent
             let mut t = MaybeUninit::uninit();
@@ -107,8 +111,7 @@ impl<R, T> Dereference<R, T> {
             let mut dn = std::mem::transmute(this);
 
             // Pin dance with the transmuated type
-            let mut_pin = Pin::as_mut(&mut dn);
-            let mut_ref: &mut Dereference<T, N> = Pin::get_unchecked_mut(mut_pin);
+            let mut_ref: &mut Dereference<T, N> = pin_dance(&mut dn);
             //And give it the new refferent
             mut_ref.referent = MaybeUninit::new(Box::new(n));
 
@@ -161,8 +164,7 @@ impl<R, T> DereferenceMut<R, T> {
     {
         let mut d = Self::new0(referee);
         unsafe {
-            let mut_pin = Pin::as_mut(&mut d);
-            let mut_d = Pin::get_unchecked_mut(mut_pin);
+            let mut_d = pin_dance(&mut d);
             let r_ptr: *mut R = &mut mut_d.referee;
             mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *r_ptr)));
         };
@@ -178,8 +180,7 @@ impl<R, T> DereferenceMut<R, T> {
         let mut d = DereferenceMut::new0(self);
 
         unsafe {
-            let mut_pin = Pin::as_mut(&mut d);
-            let mut_d = Pin::get_unchecked_mut(mut_pin);
+            let mut_d = pin_dance(&mut d);
             let t_ptr: *mut T = DereferenceMut::deref_mut(&mut mut_d.referee);
             mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
         };
@@ -195,22 +196,23 @@ impl<R, T> DereferenceMut<R, T> {
 
         let t = referentr_fn(d.referee.deref());
         unsafe {
-            let mut_pin = Pin::as_mut(&mut d);
-            Pin::get_unchecked_mut(mut_pin).referent = MaybeUninit::new(Box::new(t));
+            pin_dance(&mut d).referent = MaybeUninit::new(Box::new(t));
         };
 
         d
     }
 
-    pub fn into<'a, F, N>(mut this: Pin<Box<Self>>, referent_fn: F) -> Pin<Box<DereferenceMut<T, N>>>
+    pub fn into<'a, F, N>(
+        mut this: Pin<Box<Self>>,
+        referent_fn: F,
+    ) -> Pin<Box<DereferenceMut<T, N>>>
     where
         Self: 'a,
         F: Fn(T) -> N,
     {
         unsafe {
             // Get inside the pin
-            let mut_pin = Pin::as_mut(&mut this);
-            let mut_ref = Pin::get_unchecked_mut(mut_pin);
+            let mut_ref = pin_dance(&mut this);
 
             // prepare a landing zone for our current referent
             let mut t = MaybeUninit::uninit();
@@ -225,8 +227,7 @@ impl<R, T> DereferenceMut<R, T> {
             let mut dn = std::mem::transmute(this);
 
             // Pin dance with the transmuated type
-            let mut_pin = Pin::as_mut(&mut dn);
-            let mut_ref: &mut DereferenceMut<T, N> = Pin::get_unchecked_mut(mut_pin);
+            let mut_ref: &mut DereferenceMut<T, N> = pin_dance(&mut dn);
             //And give it the new refferent
             mut_ref.referent = MaybeUninit::new(Box::new(n));
 
