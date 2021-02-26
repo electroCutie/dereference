@@ -1,13 +1,13 @@
-use std::marker::PhantomPinned;
-use std::mem::MaybeUninit;
 use std::{
     boxed::Box,
+    marker::PhantomPinned,
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
     pin::Pin,
 };
 
 pub struct Dereference<R, T> {
-    referent: MaybeUninit<T>,
+    referent: MaybeUninit<Box<T>>,
     referee: R, // Must come second for drop order to be safe
     _pin: PhantomPinned,
 }
@@ -24,7 +24,7 @@ impl<R, T> Dereference<R, T> {
     fn pinnit(t: T, mut this: Pin<Box<Self>>) -> Pin<Box<Self>> {
         unsafe {
             let mut_pin = Pin::as_mut(&mut this);
-            Pin::get_unchecked_mut(mut_pin).referent = MaybeUninit::new(t);
+            Pin::get_unchecked_mut(mut_pin).referent = MaybeUninit::new(Box::new(t));
         }
 
         this
@@ -62,7 +62,10 @@ impl<R, T> Dereference<R, T> {
         Dereference::pinnit(n, d)
     }
 
-    pub fn chain_mut<'a, F, N>(this: Pin<Box<Self>>, referentr_fn: F) -> Pin<Box<DereferenceMut<Pin<Box<Self>>, N>>>
+    pub fn chain_mut<'a, F, N>(
+        this: Pin<Box<Self>>,
+        referentr_fn: F,
+    ) -> Pin<Box<DereferenceMut<Pin<Box<Self>>, N>>>
     where
         Self: 'a,
         F: Fn(&'a mut T) -> N,
@@ -72,13 +75,45 @@ impl<R, T> Dereference<R, T> {
         unsafe {
             let mut_pin = Pin::as_mut(&mut d);
             let mut_d = Pin::get_unchecked_mut(mut_pin);
-            
+
             let mut_self = Pin::as_mut(&mut mut_d.referee);
             let t_ptr = Pin::get_unchecked_mut(mut_self).referent.as_mut_ptr();
-            mut_d.referent = MaybeUninit::new(referentr_fn(&mut *t_ptr));
+            mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
         };
 
         d
+    }
+
+    pub fn into<'a, F, N>(mut this: Pin<Box<Self>>, referent_fn: F) -> Pin<Box<Dereference<T, N>>>
+    where
+        Self: 'a,
+        F: Fn(&R, T) -> N,
+    {
+        unsafe {
+            // Get inside the pin
+            let mut_pin = Pin::as_mut(&mut this);
+            let mut_ref = Pin::get_unchecked_mut(mut_pin);
+
+            // prepare a landing zone for our current referent
+            let mut t = MaybeUninit::uninit();
+            // And swap it out for the uninitialized value
+            std::mem::swap(&mut t, &mut mut_ref.referent);
+            // And feed it into the user supplied conversion
+            let n = referent_fn(&mut_ref.referee, *t.assume_init());
+
+            // Transmute ourselves into the new type
+            // This is safe because the referent is boxed so the new type will be the same size as the old one
+            // Also we've already de-initialized the referent with the swap, so no incorrectly typed valid memory
+            let mut dn = std::mem::transmute(this);
+
+            // Pin dance with the transmuated type
+            let mut_pin = Pin::as_mut(&mut dn);
+            let mut_ref: &mut Dereference<T, N> = Pin::get_unchecked_mut(mut_pin);
+            //And give it the new refferent
+            mut_ref.referent = MaybeUninit::new(Box::new(n));
+
+            dn
+        }
     }
 
     pub fn ref_referee(&self) -> &R {
@@ -105,13 +140,13 @@ impl<R, T> DerefMut for Dereference<R, T> {
 /* Mutable Variant (cannot borrow referee externally) */
 
 pub struct DereferenceMut<R, T> {
-    referent: MaybeUninit<T>,
+    referent: MaybeUninit<Box<T>>,
     referee: R, // Must come second for drop order to be safe
     _pin: PhantomPinned,
 }
 
 impl<R, T> DereferenceMut<R, T> {
-    fn new0(referee: R) -> Pin<Box<Self>>{
+    fn new0(referee: R) -> Pin<Box<Self>> {
         Box::pin(DereferenceMut {
             referee,
             referent: MaybeUninit::uninit(),
@@ -129,7 +164,7 @@ impl<R, T> DereferenceMut<R, T> {
             let mut_pin = Pin::as_mut(&mut d);
             let mut_d = Pin::get_unchecked_mut(mut_pin);
             let r_ptr: *mut R = &mut mut_d.referee;
-            mut_d.referent = MaybeUninit::new(referentr_fn(&mut *r_ptr));
+            mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *r_ptr)));
         };
 
         d
@@ -145,8 +180,8 @@ impl<R, T> DereferenceMut<R, T> {
         unsafe {
             let mut_pin = Pin::as_mut(&mut d);
             let mut_d = Pin::get_unchecked_mut(mut_pin);
-            let t_ptr: *mut T = mut_d.referee.deref_mut();
-            mut_d.referent = MaybeUninit::new(referentr_fn(&mut *t_ptr));
+            let t_ptr: *mut T = DereferenceMut::deref_mut(&mut mut_d.referee);
+            mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
         };
 
         d
@@ -154,17 +189,49 @@ impl<R, T> DereferenceMut<R, T> {
 
     pub fn chain<F, N>(self, referentr_fn: F) -> Pin<Box<Dereference<Self, N>>>
     where
-        F: Fn(& T) -> N,
+        F: Fn(&T) -> N,
     {
         let mut d = Dereference::new0(self);
 
         let t = referentr_fn(d.referee.deref());
         unsafe {
             let mut_pin = Pin::as_mut(&mut d);
-            Pin::get_unchecked_mut(mut_pin).referent = MaybeUninit::new(t);
+            Pin::get_unchecked_mut(mut_pin).referent = MaybeUninit::new(Box::new(t));
         };
 
         d
+    }
+
+    pub fn into<'a, F, N>(mut this: Pin<Box<Self>>, referent_fn: F) -> Pin<Box<DereferenceMut<T, N>>>
+    where
+        Self: 'a,
+        F: Fn(T) -> N,
+    {
+        unsafe {
+            // Get inside the pin
+            let mut_pin = Pin::as_mut(&mut this);
+            let mut_ref = Pin::get_unchecked_mut(mut_pin);
+
+            // prepare a landing zone for our current referent
+            let mut t = MaybeUninit::uninit();
+            // And swap it out for the uninitialized value
+            std::mem::swap(&mut t, &mut mut_ref.referent);
+            // And feed it into the user supplied conversion
+            let n = referent_fn(*t.assume_init());
+
+            // Transmute ourselves into the new type
+            // This is safe because the referent is boxed so the new type will be the same size as the old one
+            // Also we've already de-initialized the referent with the swap, so no incorrectly typed valid memory
+            let mut dn = std::mem::transmute(this);
+
+            // Pin dance with the transmuated type
+            let mut_pin = Pin::as_mut(&mut dn);
+            let mut_ref: &mut DereferenceMut<T, N> = Pin::get_unchecked_mut(mut_pin);
+            //And give it the new refferent
+            mut_ref.referent = MaybeUninit::new(Box::new(n));
+
+            dn
+        }
     }
 }
 
@@ -191,15 +258,27 @@ mod tests {
     use super::*;
     #[test]
     fn it_works() {
-        let a = //
-            Dereference::new(0, |z| (z, 0));
-        let b = //
-            Dereference::chain_mut(a, |x: &mut (&i32, i32)| {
-                x.1 = 1;
-                (x, 2)
-            });
+        let a = Dereference::new(0, |z| (z, 0));
+        let b = Dereference::chain_mut(a, |x: &mut (&i32, i32)| {
+            x.1 = 1;
+            (x, 2)
+        });
 
         let ((x, y), z) = DereferenceMut::deref(&b);
+        assert_eq!(**x, 0);
+        assert_eq!(*y, 1);
+        assert_eq!(*z, 2);
+    }
+
+    #[test]
+    fn into_works() {
+        let a = Dereference::new(0, |z| (z, 0));
+        let b = Dereference::into(a, |_, mut x: (&i32, i32)| {
+            x.1 = 1;
+            (x, 2u64)
+        });
+
+        let ((x, y), z) = Dereference::deref(&b);
         assert_eq!(**x, 0);
         assert_eq!(*y, 1);
         assert_eq!(*z, 2);
