@@ -7,8 +7,8 @@ use std::{
 };
 
 pub struct Dereference<R, T> {
-    referee: R,
     referent: MaybeUninit<T>,
+    referee: R, // Must come second for drop order to be safe
     _pin: PhantomPinned,
 }
 
@@ -105,8 +105,8 @@ impl<R, T> DerefMut for Dereference<R, T> {
 /* Mutable Variant (cannot borrow referee externally) */
 
 pub struct DereferenceMut<R, T> {
-    referee: R,
     referent: MaybeUninit<T>,
+    referee: R, // Must come second for drop order to be safe
     _pin: PhantomPinned,
 }
 
