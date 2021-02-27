@@ -1,10 +1,4 @@
-use std::{
-    boxed::Box,
-    marker::PhantomPinned,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-};
+use std::{boxed::Box, marker::PhantomPinned, mem::{ManuallyDrop, MaybeUninit}, ops::{Deref, DerefMut}, pin::Pin};
 
 unsafe fn pin_dance<'a, R, T>(pin: &'a mut Pin<R>) -> &'a mut T
 where
@@ -172,6 +166,14 @@ impl<R, T> DerefMut for Dereference<R, T> {
     }
 }
 
+impl<R,T> Drop for Dereference<R, T> {
+    fn drop(&mut self) {
+        let mut t = MaybeUninit::uninit();
+        std::mem::swap(&mut t, &mut self.referent);
+        std::mem::forget(t);
+    }
+}
+
 /* Mutable Variant (cannot borrow referee externally) */
 
 pub struct DereferenceMut<R, T> {
@@ -289,6 +291,14 @@ impl<R, T> DerefMut for DereferenceMut<R, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         // safety guranteed by construction
         unsafe { &mut *self.referent.as_mut_ptr() }
+    }
+}
+
+impl<R,T> Drop for DereferenceMut<R, T> {
+    fn drop(&mut self) {
+        let mut t = MaybeUninit::uninit();
+        std::mem::swap(&mut t, &mut self.referent);
+        std::mem::forget(t);
     }
 }
 
