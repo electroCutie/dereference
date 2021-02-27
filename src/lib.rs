@@ -15,9 +15,18 @@ where
 }
 
 trait Poly2<A, B> {}
-
 impl<R, T> Poly2<R, T> for Dereference<R, T> {}
 impl<R, T> Poly2<R, T> for DereferenceMut<R, T> {}
+
+trait Transmutable<N> {
+    type Into;
+}
+impl<R,T,N> Transmutable<N> for Dereference<R, T> {
+    type Into = Dereference<R, N>;
+}
+impl<R,T,N> Transmutable<N> for DereferenceMut<R, T> {
+    type Into = DereferenceMut<R, N>;
+}
 
 fn map0<'a, F, FOuterToTn, R, T, Tn, N, DOuter, DInner, Cons, Pinnit>(
     this: Pin<Box<DInner>>,
@@ -29,7 +38,7 @@ fn map0<'a, F, FOuterToTn, R, T, Tn, N, DOuter, DInner, Cons, Pinnit>(
 where
     F: Fn(Tn) -> N,
     Tn: 'a,
-    DInner: Poly2<R, T>,
+    DInner: Poly2<R, T> + Transmutable<N>,
     FOuterToTn: Fn(&mut DOuter) -> Tn,
     DOuter: Poly2<Box<DInner>, N>,
     Cons: Fn(Box<DInner>) -> Pin<Box<DOuter>>,
