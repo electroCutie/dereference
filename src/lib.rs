@@ -55,16 +55,18 @@ impl<R, T> Dereference<R, T> {
     pub fn map<'a, F, N>(
         this: Pin<Box<Self>>,
         referent_fn: F,
-    ) -> Pin<Box<Dereference<Pin<Box<Self>>, N>>>
+    ) -> Pin<Box<Dereference<Box<Self>, N>>>
     where
         Self: 'a,
         F: Fn(&'a T) -> N,
     {
-        let d = Dereference::new0(this);
+        let rt = unsafe { Pin::into_inner_unchecked(this) };
+        let mut d = Dereference::new0(rt);
         let n = unsafe {
+            let mut_d = pin_dance(&mut d);
             // This bypasses normal borrow checking
             // We're guaranteeing that the referee lives as long as the produced value and won't be mutated
-            referent_fn(&*d.referee.referent.as_ptr())
+            referent_fn(&*mut_d.referee.referent.as_ptr())
         };
         Dereference::pinnit(n, d)
     }
@@ -72,24 +74,27 @@ impl<R, T> Dereference<R, T> {
     pub fn map_mut<'a, F, N>(
         this: Pin<Box<Self>>,
         referentr_fn: F,
-    ) -> Pin<Box<DereferenceMut<Pin<Box<Self>>, N>>>
+    ) -> Pin<Box<DereferenceMut<Box<Self>, N>>>
     where
         Self: 'a,
         F: Fn(&'a mut T) -> N,
     {
-        let mut d = DereferenceMut::new0(this);
-
         unsafe {
+            let rt = Pin::into_inner_unchecked(this);
+            let mut d = DereferenceMut::new0(rt);
             let mut_d = pin_dance(&mut d);
-            let t_ptr = pin_dance(&mut mut_d.referee).referent.as_mut_ptr();
+            let t_ptr = mut_d.referee.referent.as_mut_ptr();
 
             mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
-        };
 
-        d
+            d
+        }
     }
 
-    pub fn map_into<'a, F, N>(mut this: Pin<Box<Self>>, referent_fn: F) -> Pin<Box<Dereference<T, N>>>
+    pub fn map_into<'a, F, N>(
+        mut this: Pin<Box<Self>>,
+        referent_fn: F,
+    ) -> Pin<Box<Dereference<T, N>>>
     where
         Self: 'a,
         F: Fn(&R, T) -> N,
@@ -108,14 +113,14 @@ impl<R, T> Dereference<R, T> {
             // Transmute ourselves into the new type
             // This is safe because the referent is boxed so the new type will be the same size as the old one
             // Also we've already de-initialized the referent with the swap, so no incorrectly typed valid memory
-            let mut dn = std::mem::transmute(this);
+            let mut d_n = std::mem::transmute(this);
 
             // Pin dance with the transmuated type
-            let mut_ref: &mut Dereference<T, N> = pin_dance(&mut dn);
+            let mut_ref: &mut Dereference<T, N> = pin_dance(&mut d_n);
             //And give it the new refferent
             mut_ref.referent = MaybeUninit::new(Box::new(n));
 
-            dn
+            d_n
         }
     }
 
@@ -172,34 +177,39 @@ impl<R, T> DereferenceMut<R, T> {
         d
     }
 
-    pub fn map_mut<'a, F, N>(self, referentr_fn: F) -> Pin<Box<DereferenceMut<Self, N>>>
+    pub fn map_mut<'a, F, N>(
+        this: Pin<Box<Self>>,
+        referentr_fn: F,
+    ) -> Pin<Box<DereferenceMut<Box<Self>, N>>>
     where
         Self: 'a,
         F: Fn(&'a mut T) -> N,
     {
-        let mut d = DereferenceMut::new0(self);
-
         unsafe {
+            let rt = Pin::into_inner_unchecked(this);
+            let mut d = DereferenceMut::new0(rt);
+
             let mut_d = pin_dance(&mut d);
             let t_ptr: *mut T = DereferenceMut::deref_mut(&mut mut_d.referee);
             mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
-        };
 
-        d
+            d
+        }
     }
 
-    pub fn map<F, N>(self, referentr_fn: F) -> Pin<Box<Dereference<Self, N>>>
+    pub fn map<F, N>(this: Pin<Box<Self>>, referentr_fn: F) -> Pin<Box<Dereference<Box<Self>, N>>>
     where
         F: Fn(&T) -> N,
     {
-        let mut d = Dereference::new0(self);
-
-        let t = referentr_fn(d.referee.deref());
         unsafe {
-            pin_dance(&mut d).referent = MaybeUninit::new(Box::new(t));
-        };
+            let rt = Pin::into_inner_unchecked(this);
+            let mut d = Dereference::new0(rt);
 
-        d
+            let t = referentr_fn(&*d.referee.referent.as_ptr());
+            pin_dance(&mut d).referent = MaybeUninit::new(Box::new(t));
+
+            d
+        }
     }
 
     pub fn map_into<'a, F, N>(
@@ -224,14 +234,14 @@ impl<R, T> DereferenceMut<R, T> {
             // Transmute ourselves into the new type
             // This is safe because the referent is boxed so the new type will be the same size as the old one
             // Also we've already de-initialized the referent with the swap, so no incorrectly typed valid memory
-            let mut dn = std::mem::transmute(this);
+            let mut d_n = std::mem::transmute(this);
 
             // Pin dance with the transmuated type
-            let mut_ref: &mut DereferenceMut<T, N> = pin_dance(&mut dn);
+            let mut_ref: &mut DereferenceMut<T, N> = pin_dance(&mut d_n);
             //And give it the new refferent
             mut_ref.referent = MaybeUninit::new(Box::new(n));
 
-            dn
+            d_n
         }
     }
 }
