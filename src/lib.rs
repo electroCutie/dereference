@@ -38,7 +38,7 @@ fn map0<'a, F, FOuterToTn, R, T, Tn, N, DOuter, DInner, Cons, Pinnit>(
 where
     F: Fn(Tn) -> N,
     Tn: 'a,
-    DInner: Poly2<R, T> + Transmutable<N>,
+    DInner: Poly2<R, T>,
     FOuterToTn: Fn(&mut DOuter) -> Tn,
     DOuter: Poly2<Box<DInner>, N>,
     Cons: Fn(Box<DInner>) -> Pin<Box<DOuter>>,
@@ -64,7 +64,7 @@ fn map_into0<F, R, Rn, T, N, DIn, DOut, GetT, GetR, Pinnit>(
 ) -> Pin<Box<DOut>>
 where
     F: Fn(&Rn, T) -> N,
-    DIn: Poly2<R, T>,
+    DIn: Poly2<R, T> + Transmutable<N>,
     DOut: Poly2<R, N>,
     GetT: Fn(&mut DIn) -> &mut MaybeUninit<Box<T>>,
     GetR: Fn(&DIn) -> &Rn,
