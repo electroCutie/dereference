@@ -191,13 +191,6 @@ impl<R, T> Deref for Dereference<R, T> {
     }
 }
 
-impl<R, T> DerefMut for Dereference<R, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // safety guranteed by construction
-        unsafe { &mut *self.referent.as_mut_ptr() }
-    }
-}
-
 impl<R, T> Drop for Dereference<R, T> {
     fn drop(&mut self) {
         let mut t = MaybeUninit::uninit();
@@ -300,13 +293,6 @@ impl<R, T> Deref for DereferenceMut<R, T> {
     fn deref(&self) -> &Self::Target {
         // safety guranteed by construction
         unsafe { &*self.referent.as_ptr() }
-    }
-}
-
-impl<R, T> DerefMut for DereferenceMut<R, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        // safety guranteed by construction
-        unsafe { &mut *self.referent.as_mut_ptr() }
     }
 }
 
