@@ -52,7 +52,7 @@ impl<R, T> Dereference<R, T> {
         Self::pinnit(t, d)
     }
 
-    pub fn chain<'a, F, N>(
+    pub fn map<'a, F, N>(
         this: Pin<Box<Self>>,
         referent_fn: F,
     ) -> Pin<Box<Dereference<Pin<Box<Self>>, N>>>
@@ -69,7 +69,7 @@ impl<R, T> Dereference<R, T> {
         Dereference::pinnit(n, d)
     }
 
-    pub fn chain_mut<'a, F, N>(
+    pub fn map_mut<'a, F, N>(
         this: Pin<Box<Self>>,
         referentr_fn: F,
     ) -> Pin<Box<DereferenceMut<Pin<Box<Self>>, N>>>
@@ -89,7 +89,7 @@ impl<R, T> Dereference<R, T> {
         d
     }
 
-    pub fn into<'a, F, N>(mut this: Pin<Box<Self>>, referent_fn: F) -> Pin<Box<Dereference<T, N>>>
+    pub fn map_into<'a, F, N>(mut this: Pin<Box<Self>>, referent_fn: F) -> Pin<Box<Dereference<T, N>>>
     where
         Self: 'a,
         F: Fn(&R, T) -> N,
@@ -172,7 +172,7 @@ impl<R, T> DereferenceMut<R, T> {
         d
     }
 
-    pub fn chain_mut<'a, F, N>(self, referentr_fn: F) -> Pin<Box<DereferenceMut<Self, N>>>
+    pub fn map_mut<'a, F, N>(self, referentr_fn: F) -> Pin<Box<DereferenceMut<Self, N>>>
     where
         Self: 'a,
         F: Fn(&'a mut T) -> N,
@@ -188,7 +188,7 @@ impl<R, T> DereferenceMut<R, T> {
         d
     }
 
-    pub fn chain<F, N>(self, referentr_fn: F) -> Pin<Box<Dereference<Self, N>>>
+    pub fn map<F, N>(self, referentr_fn: F) -> Pin<Box<Dereference<Self, N>>>
     where
         F: Fn(&T) -> N,
     {
@@ -202,7 +202,7 @@ impl<R, T> DereferenceMut<R, T> {
         d
     }
 
-    pub fn into<'a, F, N>(
+    pub fn map_into<'a, F, N>(
         mut this: Pin<Box<Self>>,
         referent_fn: F,
     ) -> Pin<Box<DereferenceMut<T, N>>>
@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn it_works() {
         let a = Dereference::new(0, |z| (z, 0));
-        let b = Dereference::chain_mut(a, |x: &mut (&i32, i32)| {
+        let b = Dereference::map_mut(a, |x: &mut (&i32, i32)| {
             x.1 = 1;
             (x, 2)
         });
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn into_works() {
         let a = Dereference::new(0, |z| (z, 0));
-        let b = Dereference::into(a, |_, mut x: (&i32, i32)| {
+        let b = Dereference::map_into(a, |_, mut x: (&i32, i32)| {
             x.1 = 1;
             (x, 2u64)
         });
