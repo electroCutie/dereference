@@ -14,6 +14,38 @@ where
     Pin::get_unchecked_mut(mut_pin)
 }
 
+trait Poly2<A, B> {}
+
+impl<R, T> Poly2<R, T> for Dereference<R, T> {}
+impl<R, T> Poly2<R, T> for DereferenceMut<R, T> {}
+
+fn map0<'a, F, FOuterToTn, R, T, Tn, N, DOuter, DInner, Cons, Pinnit>(
+    this: Pin<Box<DInner>>,
+    referent_fn: F,
+    cons: Cons,
+    get_t: FOuterToTn,
+    pin: Pinnit,
+) -> Pin<Box<DOuter>>
+where
+    F: Fn(Tn) -> N,
+    Tn: 'a,
+    DInner: Poly2<R, T>,
+    FOuterToTn: Fn(&mut DOuter) -> Tn,
+    DOuter: Poly2<Box<DInner>, N>,
+    Cons: Fn(Box<DInner>) -> Pin<Box<DOuter>>,
+    Pinnit: Fn(N, Pin<Box<DOuter>>) -> Pin<Box<DOuter>>,
+{
+    let rt = unsafe { Pin::into_inner_unchecked(this) };
+    let mut d = cons(rt);
+    let n = unsafe {
+        let mut mut_d = pin_dance(&mut d);
+        // This bypasses normal borrow checking
+        // We're guaranteeing that the referee lives as long as the produced value and won't be mutated
+        referent_fn(get_t(&mut mut_d))
+    };
+    pin(n, d)
+}
+
 pub struct Dereference<R, T> {
     referent: MaybeUninit<Box<T>>,
     referee: R, // Must come second for drop order to be safe
@@ -60,35 +92,30 @@ impl<R, T> Dereference<R, T> {
         Self: 'a,
         F: Fn(&'a T) -> N,
     {
-        let rt = unsafe { Pin::into_inner_unchecked(this) };
-        let mut d = Dereference::new0(rt);
-        let n = unsafe {
-            let mut_d = pin_dance(&mut d);
-            // This bypasses normal borrow checking
-            // We're guaranteeing that the referee lives as long as the produced value and won't be mutated
-            referent_fn(&*mut_d.referee.referent.as_ptr())
-        };
-        Dereference::pinnit(n, d)
+        map0(
+            this,
+            referent_fn,
+            Dereference::new0,
+            |m_d| unsafe { &*m_d.referee.referent.as_ptr() },
+            Dereference::pinnit,
+        )
     }
 
     pub fn map_mut<'a, F, N>(
         this: Pin<Box<Self>>,
-        referentr_fn: F,
+        referent_fn: F,
     ) -> Pin<Box<DereferenceMut<Box<Self>, N>>>
     where
         Self: 'a,
         F: Fn(&'a mut T) -> N,
     {
-        unsafe {
-            let rt = Pin::into_inner_unchecked(this);
-            let mut d = DereferenceMut::new0(rt);
-            let mut_d = pin_dance(&mut d);
-            let t_ptr = mut_d.referee.referent.as_mut_ptr();
-
-            mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
-
-            d
-        }
+        map0(
+            this,
+            referent_fn,
+            DereferenceMut::new0,
+            |m_d| unsafe { &mut *m_d.referee.referent.as_mut_ptr() },
+            DereferenceMut::pinnit,
+        )
     }
 
     pub fn map_into<'a, F, N>(
@@ -162,6 +189,14 @@ impl<R, T> DereferenceMut<R, T> {
         })
     }
 
+    fn pinnit(t: T, mut this: Pin<Box<Self>>) -> Pin<Box<Self>> {
+        unsafe {
+            pin_dance(&mut this).referent = MaybeUninit::new(Box::new(t));
+        }
+
+        this
+    }
+
     pub fn new_mut<'a, F>(referee: R, referentr_fn: F) -> Pin<Box<Self>>
     where
         R: 'a,
@@ -179,37 +214,32 @@ impl<R, T> DereferenceMut<R, T> {
 
     pub fn map_mut<'a, F, N>(
         this: Pin<Box<Self>>,
-        referentr_fn: F,
+        referent_fn: F,
     ) -> Pin<Box<DereferenceMut<Box<Self>, N>>>
     where
         Self: 'a,
         F: Fn(&'a mut T) -> N,
     {
-        unsafe {
-            let rt = Pin::into_inner_unchecked(this);
-            let mut d = DereferenceMut::new0(rt);
-
-            let mut_d = pin_dance(&mut d);
-            let t_ptr: *mut T = DereferenceMut::deref_mut(&mut mut_d.referee);
-            mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *t_ptr)));
-
-            d
-        }
+        map0(
+            this,
+            referent_fn,
+            DereferenceMut::new0,
+            |m_d| unsafe { &mut *m_d.referee.referent.as_mut_ptr() },
+            DereferenceMut::pinnit,
+        )
     }
 
-    pub fn map<F, N>(this: Pin<Box<Self>>, referentr_fn: F) -> Pin<Box<Dereference<Box<Self>, N>>>
+    pub fn map<F, N>(this: Pin<Box<Self>>, referent_fn: F) -> Pin<Box<Dereference<Box<Self>, N>>>
     where
         F: Fn(&T) -> N,
     {
-        unsafe {
-            let rt = Pin::into_inner_unchecked(this);
-            let mut d = Dereference::new0(rt);
-
-            let t = referentr_fn(&*d.referee.referent.as_ptr());
-            pin_dance(&mut d).referent = MaybeUninit::new(Box::new(t));
-
-            d
-        }
+        map0(
+            this,
+            referent_fn,
+            Dereference::new0,
+            |m_d| unsafe { &*m_d.referee.referent.as_ptr() },
+            Dereference::pinnit,
+        )
     }
 
     pub fn map_into<'a, F, N>(
