@@ -1,4 +1,11 @@
-use std::{boxed::Box, cell::UnsafeCell, marker::PhantomPinned, mem::MaybeUninit, ops::{Deref, DerefMut}, pin::Pin};
+use std::{
+    boxed::Box,
+    cell::UnsafeCell,
+    marker::PhantomPinned,
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+};
 
 unsafe fn pin_dance<'a, R, T>(pin: &'a mut Pin<R>) -> &'a mut T
 where
@@ -15,10 +22,10 @@ impl<R, T> Poly2<R, T> for DereferenceMut<R, T> {}
 trait Transmutable<N> {
     type Into;
 }
-impl<R,T,N> Transmutable<N> for Dereference<R, T> {
+impl<R, T, N> Transmutable<N> for Dereference<R, T> {
     type Into = Dereference<R, N>;
 }
-impl<R,T,N> Transmutable<N> for DereferenceMut<R, T> {
+impl<R, T, N> Transmutable<N> for DereferenceMut<R, T> {
     type Into = DereferenceMut<R, N>;
 }
 
@@ -213,7 +220,7 @@ impl<R, T> DereferenceMut<R, T> {
         })
     }
 
-    fn uninit_box_cell(t: T) -> MaybeUninit<Box<UnsafeCell<T>>>{
+    fn uninit_box_cell(t: T) -> MaybeUninit<Box<UnsafeCell<T>>> {
         MaybeUninit::new(Box::new(UnsafeCell::new(t)))
     }
 
@@ -288,15 +295,12 @@ impl<R, T> DereferenceMut<R, T> {
         )
     }
 
-    pub fn deref_mut<'a>(
-        this: &'a mut Pin<Box<DereferenceMut<R, T>>>
-    ) -> &'a mut T {
-        unsafe { 
+    pub fn deref_mut<'a>(this: &'a mut Pin<Box<DereferenceMut<R, T>>>) -> &'a mut T {
+        unsafe {
             let x = &*this.referent.as_ptr();
-            &mut * x.as_ref().get()
+            &mut *x.as_ref().get()
         }
     }
-
 }
 
 impl<R, T> Deref for DereferenceMut<R, T> {
@@ -306,7 +310,7 @@ impl<R, T> Deref for DereferenceMut<R, T> {
         // safety guranteed by construction
         unsafe {
             let b = &*self.referent.as_ptr();
-            &* b.as_ref().get()
+            &*b.as_ref().get()
         }
     }
 }
@@ -319,11 +323,14 @@ impl<R, T> Drop for DereferenceMut<R, T> {
     }
 }
 
-impl<R, T> Iterator for Pin<Box<DereferenceMut<R, T>>> where T: Iterator{
+impl<R, T> Iterator for Pin<Box<DereferenceMut<R, T>>>
+where
+    T: Iterator,
+{
     type Item = T::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
-        <DereferenceMut<R,T>>::deref_mut(self).next()
+        <DereferenceMut<R, T>>::deref_mut(self).next()
     }
 }
 
