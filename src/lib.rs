@@ -1,10 +1,4 @@
-use std::{
-    boxed::Box,
-    marker::PhantomPinned,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-};
+use std::{boxed::Box, cell::UnsafeCell, marker::PhantomPinned, mem::MaybeUninit, ops::{Deref, DerefMut}, pin::Pin};
 
 unsafe fn pin_dance<'a, R, T>(pin: &'a mut Pin<R>) -> &'a mut T
 where
@@ -37,7 +31,7 @@ fn map0<'a, F, FOuterToTn, R, T, Tn, N, DOuter, DInner, Cons, Pinnit>(
 ) -> Pin<Box<DOuter>>
 where
     F: Fn(Tn) -> N,
-    Tn: 'a,
+    // Tn: 'a,
     DInner: Poly2<R, T>,
     FOuterToTn: Fn(&mut DOuter) -> Tn,
     DOuter: Poly2<Box<DInner>, N>,
@@ -55,10 +49,11 @@ where
     pin(n, d)
 }
 
-fn map_into0<F, R, Rn, T, N, DIn, DOut, GetT, GetR, Pinnit>(
+fn map_into0<F, R, Rn, T, N, DIn, DOut, GetT, InnerInit, UnwrapInnerInit, GetR, Pinnit>(
     mut this: Pin<Box<DIn>>,
     referent_fn: F,
     get_t: GetT,
+    unwrap_inner: UnwrapInnerInit,
     get_r: GetR,
     pin: Pinnit,
 ) -> Pin<Box<DOut>>
@@ -66,7 +61,8 @@ where
     F: Fn(&Rn, T) -> N,
     DIn: Poly2<R, T> + Transmutable<N>,
     DOut: Poly2<R, N>,
-    GetT: Fn(&mut DIn) -> &mut MaybeUninit<Box<T>>,
+    GetT: Fn(&mut DIn) -> &mut MaybeUninit<InnerInit>,
+    UnwrapInnerInit: Fn(InnerInit) -> T,
     GetR: Fn(&DIn) -> &Rn,
     Pinnit: Fn(N, Pin<Box<DOut>>) -> Pin<Box<DOut>>,
 {
@@ -79,7 +75,7 @@ where
         // And swap it out for the uninitialized value
         std::mem::swap(&mut t, get_t(mut_ref));
         // And feed it into the user supplied conversion
-        let n = referent_fn(get_r(mut_ref), *t.assume_init());
+        let n = referent_fn(get_r(mut_ref), unwrap_inner(t.assume_init()));
 
         // Transmute ourselves into the new type
         // This is safe because the referent is boxed so the new type will be the same size as the old one
@@ -172,6 +168,7 @@ impl<R, T> Dereference<R, T> {
             this,
             referent_fn,
             |m_r| &mut m_r.referent,
+            |boxed| *boxed,
             |m_r| &m_r.referee,
             Dereference::pinnit,
         )
@@ -202,7 +199,7 @@ impl<R, T> Drop for Dereference<R, T> {
 /* Mutable Variant (cannot borrow referee externally) */
 
 pub struct DereferenceMut<R, T> {
-    referent: MaybeUninit<Box<T>>,
+    referent: MaybeUninit<Box<UnsafeCell<T>>>,
     referee: R, // Must come second for drop order to be safe
     _pin: PhantomPinned,
 }
@@ -216,9 +213,13 @@ impl<R, T> DereferenceMut<R, T> {
         })
     }
 
+    fn uninit_box_cell(t: T) -> MaybeUninit<Box<UnsafeCell<T>>>{
+        MaybeUninit::new(Box::new(UnsafeCell::new(t)))
+    }
+
     fn pinnit(t: T, mut this: Pin<Box<Self>>) -> Pin<Box<Self>> {
         unsafe {
-            pin_dance(&mut this).referent = MaybeUninit::new(Box::new(t));
+            pin_dance(&mut this).referent = Self::uninit_box_cell(t);
         }
 
         this
@@ -233,7 +234,7 @@ impl<R, T> DereferenceMut<R, T> {
         unsafe {
             let mut_d = pin_dance(&mut d);
             let r_ptr: *mut R = &mut mut_d.referee;
-            mut_d.referent = MaybeUninit::new(Box::new(referentr_fn(&mut *r_ptr)));
+            mut_d.referent = Self::uninit_box_cell(referentr_fn(&mut *r_ptr));
         };
 
         d
@@ -251,7 +252,7 @@ impl<R, T> DereferenceMut<R, T> {
             this,
             referent_fn,
             DereferenceMut::new0,
-            |m_d| unsafe { &mut *m_d.referee.referent.as_mut_ptr() },
+            |m_d| unsafe { &mut *(*m_d.referee.referent.as_ptr()).get() },
             DereferenceMut::pinnit,
         )
     }
@@ -264,7 +265,7 @@ impl<R, T> DereferenceMut<R, T> {
             this,
             referent_fn,
             Dereference::new0,
-            |m_d| unsafe { &*m_d.referee.referent.as_ptr() },
+            |m_d| unsafe { &*(*m_d.referee.referent.as_ptr()).get() },
             Dereference::pinnit,
         )
     }
@@ -281,10 +282,21 @@ impl<R, T> DereferenceMut<R, T> {
             this,
             |_: &(), x| referent_fn(x),
             |m_r| &mut m_r.referent,
+            |box_cell| (*box_cell).into_inner(),
             |_| &(),
             DereferenceMut::pinnit,
         )
     }
+
+    pub fn deref_mut<'a>(
+        this: &'a mut Pin<Box<DereferenceMut<R, T>>>
+    ) -> &'a mut T {
+        unsafe { 
+            let x = &*this.referent.as_ptr();
+            &mut * x.as_ref().get()
+        }
+    }
+
 }
 
 impl<R, T> Deref for DereferenceMut<R, T> {
@@ -292,7 +304,10 @@ impl<R, T> Deref for DereferenceMut<R, T> {
 
     fn deref(&self) -> &Self::Target {
         // safety guranteed by construction
-        unsafe { &*self.referent.as_ptr() }
+        unsafe {
+            let b = &*self.referent.as_ptr();
+            &* b.as_ref().get()
+        }
     }
 }
 
@@ -301,6 +316,14 @@ impl<R, T> Drop for DereferenceMut<R, T> {
         let mut t = MaybeUninit::uninit();
         std::mem::swap(&mut t, &mut self.referent);
         std::mem::forget(t);
+    }
+}
+
+impl<R, T> Iterator for Pin<Box<DereferenceMut<R, T>>> where T: Iterator{
+    type Item = T::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        <DereferenceMut<R,T>>::deref_mut(self).next()
     }
 }
 
